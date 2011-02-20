@@ -10,6 +10,7 @@ INCLUDE_SUBDIRS := $(shell find $(INCLUDEDIR) -type d -print)
 
 CXXFILES           := $(foreach dir,$(SRC_SUBDIRS),$(wildcard $(dir)/*.cpp))
 HEADERS            := $(foreach dir,$(INCLUDE_SUBDIRS),$(wildcard $(dir)/*.h))
+ALLFILES                := $(CXXFILES) $(HEADERS)
 
 CFLAGS      := -W -Wall -I -pthread -g
 INCLUDE := -I$(INCLUDEDIR)/ -Ilib/
@@ -29,11 +30,12 @@ adjapp: $(CXXFILES) $(HEADERS) $(LIBS)
 
 list:
 	@echo $(CXXFILES)
+	@echo "..."
 	@echo $(HEADERS)
 
+LINTFILTERS := -whitespace,-legal/copyright,-build/header_guard
 lint:
-	$(foreach myfile,$(HEADERS),python cpplint.py --filter=-whitespace $(myfile);)
-	$(foreach myfile,$(CXXFILES),python cpplint.py --filter=-whitespace $(myfile);)
+	$(foreach myfile,$(filter-out src/json/%.cpp include/json/%.h,$(ALLFILES)),python cpplint.py --filter=$(LINTFILTERS) $(myfile);)
 
 clean:
 	rm -f server $(CXXOBJS)
