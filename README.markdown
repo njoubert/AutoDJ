@@ -8,6 +8,6 @@ physics library for Processing. http://murderandcreate.com/physics/
 
 ## Contributers:
 
-- **Patrick Tierney** -- patrick.l.tierney@gmail.com
-- **Niels Joubert** -- njoubert@gmail.com
-- **Gleb Denisov** -- glebdenisov@gmail.com
+- [Patrick Tierney](http://ptierney.com/) -- patrick.l.tierney@gmail.com
+- [Niels Joubert](http://njoubert.com/) -- njoubert@gmail.com
+- [Gleb Denisov](http://glebden.com) -- glebdenisov@gmail.com
