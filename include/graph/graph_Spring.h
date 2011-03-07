@@ -12,19 +12,19 @@ public:
     Spring(Particle& a, Particle& b, float ks, float d, float r);
     virtual ~Spring();
 
-    void Spring::turn_off() { on_ = false; }
-    void Spring::turn_on() { on_ = true; }
-    bool Spring::is_on() { return on_; }
-    bool Spring::is_off() { return !on_; }
+    void turn_off() { on_ = false; }
+    void turn_on() { on_ = true; }
+    bool is_on() { return on_; }
+    bool is_off() { return !on_; }
 
-    Particle& Spring::get_one_end() { return a_; }
-    Particle& Spring::get_the_other_end() { return b_; }
+    Particle& get_one_end() { return a_; }
+    Particle& get_the_other_end() { return b_; }
 
     float current_length();
     float rest_length() { return rest_length_; }
     void set_rest_length(float r) { rest_length_ = r; }
     float strength() { return spring_constant_; }
-    void set_strength(float ks);
+    void set_strength(float ks) { spring_constant_ = ks; }
     float damping() { return damping_; }
     void set_damping(float d) { damping_ = d; }
     

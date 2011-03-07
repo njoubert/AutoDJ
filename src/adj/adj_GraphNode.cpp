@@ -3,27 +3,34 @@
 
 #include <exception>
 
-#include "boost/date_time/posix_time/posix_time.hpp"
+#include <boost/date_time/posix_time/posix_time.hpp>
 
-#include "cinder/gl/gl.h"
-#include "cinder/app/App.h"
-#include "cinder/Utilities.h"
-#include "cinder/CinderMath.h"
+#include <cinder/gl/gl.h>
+#include <cinder/app/App.h>
+#include <cinder/Utilities.h>
+#include <cinder/CinderMath.h>
 
-#include "graph/graph_Particle.h"
+#include <graph/graph_Particle.h>
+#include <graph/graph_Spring.h>
 
-#include "adj/adj_GraphNode.h"
-#include "adj/adj_Song.h"
-#include "adj/adj_CalloutBox.h"
-#include "adj/adj_VoteManager.h"
+#include <adj/adj_GraphNode.h>
+#include <adj/adj_Song.h>
+#include <adj/adj_CalloutBox.h>
+#include <adj/adj_VoteManager.h>
+#include <adj/adj_GraphPhysics.h>
+
+#include <Resources.h>
 
 namespace adj {
 
 GraphNode::GraphNode() {
     is_valid_ = false;
     circle_radius_ = 5.0f;
-    node_color_ = ci::ColorA(0.839f, 0.839f, 0.839f, 1.0f);
-    node_highlight_color_ = ci::ColorA(0.0f, 0.643f, 1.0f, 1.0f);
+    // Crowdtap medium grey
+    node_color_ = ci::ColorA(120.0f / 255.f, 122.f / 255.f, 
+        126.f / 255.f, 1.0f);
+    // Crowdtap red
+    node_highlight_color_ = ci::ColorA(255.f / 255.f, 51.f / 255.f, 0.f, 1.f);
     scale_ = 1.0f;
     max_scale_ = 1.0f;
     min_scale_ = 0.35f;
@@ -36,6 +43,12 @@ GraphNode::GraphNode() {
     display_time_ = 6000; // in milliseconds
     path_trigger_delay_time_ = 400; // in ms
 
+    relax_time_ = 120000; // in milliseconds
+    closest_spring_length_ = 20.0f;
+    closest_spring_strength_ = 0.2f;
+    farthest_spring_length_ = 100.0f;
+    farthest_spring_strength_ = 0.1f;
+
     is_fading_in_ = false;
     is_fading_out_ = false;
     is_path_delaying_ = false;
@@ -45,11 +58,21 @@ void GraphNode::init() {
     // Graph nodes must have a song at the moment
     if (song_.get() == NULL)
         throw(std::runtime_error("Trying to create a graph node without a song"));
+
+    highlight_circle_ = ci::loadImage(ci::app::loadResource(RES_NODE_HIGHLIGHT));
+    highlight_circle_texture_ = ci::gl::Texture(highlight_circle_);
+    circle_texture_scale_ = circle_radius_ * 2.0f / highlight_circle_.getWidth();
+
+    last_vote_time_ = boost::posix_time::microsec_clock::universal_time();
 }
 
 GraphNode::~GraphNode() {
-    // remove from GraphNodeFactory list
     // remove / delete particle
+    GraphPhysics::instance().remove_particle(particle_);
+
+    // delete callout box
+    callout_box_.reset();
+
     // remove / delete / stop song
 }
 
@@ -83,13 +106,41 @@ void GraphNode::hide() {
     visible_ = false;
 }
 
+float GraphNode::get_width() {
+    return 2.0f * circle_radius_;
+}
+
+float GraphNode::get_height() {
+    return 2.0f * circle_radius_;
+}
+
+float GraphNode::get_pos_x() {
+    return particle_->position().x;
+}
+
+float GraphNode::get_pos_y() {
+    return particle_->position().y;
+}
+
 void GraphNode::draw() {
     if (!visible_)
         return;
 
+    update_spring_values();
+
     // check if it's fading in / out, if it's been displayed long enough, etc
     check_transition_states();
-    
+}
+
+void GraphNode::draw_callout_box() {
+    ci::gl::pushMatrices();
+
+        callout_box_->draw();
+
+    ci::gl::popMatrices();
+}
+
+void GraphNode::draw_node_body() {
     ci::gl::pushMatrices();
 
         ci::gl::translate(particle_->position());
@@ -98,12 +149,6 @@ void GraphNode::draw() {
             draw_current_song();
         else
             draw_node();
-
-    ci::gl::popMatrices();
-
-    ci::gl::pushMatrices();
-
-        callout_box_->draw();
 
     ci::gl::popMatrices();
 }
@@ -116,12 +161,16 @@ void GraphNode::draw_current_song() {
 
 void GraphNode::draw_node() {
     // TODO: cache this value
-    ci::gl::scale(ci::Vec3f::one() * ci::lmap<float>(distance_from_current_,
-        0, 10, max_scale_, min_scale_));
+    //ci::gl::scale(ci::Vec3f::one() * ci::lmap<float>(distance_from_current_,
+    //    0, 10, max_scale_, min_scale_));
 
     if (highlight_connection()) {
-        ci::gl::color(node_highlight_color_);
-        ci::gl::drawStrokedCircle(ci::Vec2f::zero(), circle_radius_);
+        ci::gl::pushMatrices();
+            ci::gl::translate(ci::Vec2f(-circle_radius_, -circle_radius_));
+            ci::gl::scale(ci::Vec3f::one() * circle_texture_scale_);
+            ci::gl::color(ci::Color::white());
+            ci::gl::draw(highlight_circle_texture_);
+        ci::gl::popMatrices();
     } else {
         ci::gl::color(node_color_);
         ci::gl::drawSolidCircle(ci::Vec2f::zero(), circle_radius_);
@@ -129,15 +178,23 @@ void GraphNode::draw_node() {
 }
 
 void GraphNode::add_child(GraphNodePtr child) {
-    // check children_ to see if it already contains child
-    // TODO: replace this with a proper std::algorithm
-    for (std::vector<GraphNodePtr>::const_iterator it = children_.begin();
-        it != children_.end(); ++it) {
-        if (it->get() == child.get())
-            return;
-    }
+    std::vector<GraphNodePtr>::iterator it = std::find(
+        children_.begin(), children_.end(), child);
+
+    if (it != children_.end())
+        return;
 
     children_.push_back(child);
+}
+
+void GraphNode::remove_child(GraphNodePtr child) {
+    std::vector<GraphNodePtr>::iterator it = std::find(
+        children_.begin(), children_.end(), child);
+
+    if (it == children_.end())
+        return;
+
+    children_.erase(it);
 }
 
 void GraphNode::update_distance_from_current() {
@@ -186,6 +243,16 @@ void GraphNode::register_vote(VotePtr vote) {
 
     song_->register_vote(vote);
 
+    last_vote_time_ = boost::posix_time::microsec_clock::universal_time();
+
+    if (callout_box_.get() != NULL) {
+        callout_box_->show();
+
+        start_callout_fadein();
+
+        display_timer_ = boost::posix_time::microsec_clock::universal_time();
+    }
+
     update_appearance();
 }
 
@@ -205,8 +272,8 @@ void GraphNode::register_just_added() {
 
     display_timer_ = boost::posix_time::microsec_clock::universal_time();
 
-    is_path_delaying_ = true;
-    path_trigger_timer_ = boost::posix_time::microsec_clock::universal_time();
+    //is_path_delaying_ = true;
+    //path_trigger_timer_ = boost::posix_time::microsec_clock::universal_time();
 }
 
 void GraphNode::register_path_activate() {
@@ -216,7 +283,7 @@ void GraphNode::register_path_activate() {
     callout_box_->show();
     display_timer_ = boost::posix_time::microsec_clock::universal_time();
 
-        // if you've reached the now playing (or transitioning) song, 
+    // if you've reached the now playing (or transitioning) song, 
     // don't bother activating the path
     if (song_->is_playing())
         return;
@@ -246,7 +313,7 @@ void GraphNode::check_transition_states() {
     if (is_fading_in_)
         transition_fading_in();
 
-    if (is_fading_out_)
+    if (is_fading_out_ && !is_current_song_)
         transition_fading_out();
 
     if (callout_box_->visible())
@@ -312,6 +379,28 @@ void GraphNode::trigger_next_node() {
 
 bool GraphNode::highlight_connection() {
     return callout_box_->visible();
+}
+
+void GraphNode::update_spring_values() {
+    if (particle_->springs().empty())
+        return;
+
+    int elapsed = get_milliseconds_elapsed(last_vote_time_);
+
+    float strength = ci::lmap<float>(elapsed, 0, relax_time_,
+        closest_spring_strength_, farthest_spring_strength_);
+
+    strength = ci::math<float>::clamp(strength, closest_spring_strength_,
+        farthest_spring_strength_);
+
+    float length = ci::lmap<float>(elapsed, 0, relax_time_, 
+        closest_spring_length_, farthest_spring_length_);
+
+    length = ci::math<float>::clamp(length, closest_spring_length_,
+        farthest_spring_length_);
+
+    particle_->springs()[0]->set_rest_length(length);
+    particle_->springs()[0]->set_strength(strength);
 }
 
 }

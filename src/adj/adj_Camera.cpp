@@ -1,14 +1,15 @@
 
-#include "cinder/gl/gl.h"
-#include "cinder/CinderMath.h"
+#include <cinder/gl/gl.h>
+#include <cinder/CinderMath.h>
 
-#include "graph/graph_ParticleSystem.h"
-#include "graph/graph_Particle.h"
+#include <graph/graph_ParticleSystem.h>
+#include <graph/graph_Particle.h>
 
-#include "adj/adj_Camera.h"
-#include "AdjApp.h"
-#include "adj/adj_GraphPhysics.h"
-#include "adj/adj_CalloutBox.h"
+#include <adj/adj_Camera.h>
+#include <AdjApp.h>
+#include <adj/adj_GraphPhysics.h>
+#include <adj/adj_CalloutBox.h>
+#include <adj/adj_Renderer.h>
 
 namespace adj {
 
@@ -16,10 +17,13 @@ Camera* Camera::instance_ = NULL;
 
 Camera::Camera() {
     // the circles are approximately 10 units wide
-    width_border_ = 15.0f; 
-    height_border_ = 15.0f;
+    width_border_ = 40.0f; 
+    height_border_ = 40.0f;
     scale_ = 1.0f;
     centroid_ = ci::Vec2f::zero();
+
+    scale_damping_ = 0.03;
+    centroid_damping_ = 0.03;
 }
 
 void Camera::init() {
@@ -32,70 +36,75 @@ void Camera::setup() {
 }
 
 void Camera::update() {
-    // monitor time and update tweening
     update_centroid();
 }
 
 void Camera::transform_draw() {
-    ci::gl::translate(static_cast<ci::Vec2f>(
-        AdjApp::instance().getWindowSize()) / 2.0f);
     ci::gl::scale(ci::Vec3f::one() * scale_);
     ci::gl::translate(centroid_);
-    
 }
 
 void Camera::update_centroid() {
-    if (p_system_->particles_.size() < 2)
+    std::vector<GraphicItem*>& g_items = 
+        Renderer::instance().graphic_items();
+
+    if (g_items.size() < 2)
         return;
 
-    ParticlePtr first = p_system_->particles_[0];
+    GraphicItem& first = *(g_items[0]);
 
-    float x_min = first->position().x;
-    float x_max = first->position().x;
-    float y_min = first->position().y;
-    float y_max = first->position().y;
+    float x_min = first.get_pos_x();
+    float x_max = first.get_pos_x();
+    float y_min = first.get_pos_y();
+    float y_max = first.get_pos_y();
 
-    // check all node particles for bounds
-    for (std::vector<ParticlePtr>::iterator it = p_system_->particles_.begin();
-        it != p_system_->particles_.end(); ++it) {
+    for (std::vector<GraphicItem*>::iterator it = g_items.begin();
+        it != g_items.end(); ++it) {
 
-        graph::Particle& p = *(*it);
+        GraphicItem& g = *(*it);
 
-        x_max = ci::math<float>::max(x_max, p.position().x);
-        x_min = ci::math<float>::min(x_min, p.position().x);
-        y_min = ci::math<float>::min(y_min, p.position().y);
-        y_max = ci::math<float>::max(y_max, p.position().y);
-    }
+        if (!g.visible())
+            continue;
 
-    float width_max = CalloutBox::max_width();
-    float height_max = CalloutBox::max_height();
+        float half_w = g.get_width() / 2.0f;
+        float half_h = g.get_height() / 2.0f;
 
-    // check all the box particles for their bounds
-    for (std::vector<ParticlePtr>::iterator it = box_p_system_->particles_.begin();
-        it != box_p_system_->particles_.end(); ++it) {
-
-        graph::Particle& p = *(*it);
-
-        x_max = ci::math<float>::max(x_max, p.position().x + width_max * 0.5f);
-        x_min = ci::math<float>::min(x_min, p.position().x - width_max * 0.5f);
-        y_min = ci::math<float>::min(y_min, p.position().y - height_max * 0.5f);
-        y_max = ci::math<float>::max(y_max, p.position().y + height_max * 0.5f);
+        x_max = ci::math<float>::max(x_max, g.get_pos_x() + half_w);
+        x_min = ci::math<float>::min(x_min, g.get_pos_x() - half_w);
+        y_min = ci::math<float>::min(y_min, g.get_pos_y() - half_h);
+        y_max = ci::math<float>::max(y_max, g.get_pos_y() + half_h);
     }
 
     float delta_x = x_max - x_min;
     float delta_y = y_max - y_min;
 
-    centroid_.x = x_min + 0.5f * delta_x;
-    centroid_.y = y_min + 0.5f * delta_y;
+    float target_x = x_min;
+    float target_y = y_min;
 
-    centroid_ *= -1.0f;
+    target_x -= width_border_ / scale_;
+    target_y -= height_border_ / scale_;
 
-    float width_scale  = static_cast<float>(AdjApp::instance().getWindowWidth()) / 
-        (delta_x + width_border_);
-    float height_scale = static_cast<float>(AdjApp::instance().getWindowHeight()) / 
-        (delta_y + height_border_);
+    ci::Vec2f centroid_target = ci::Vec2f(target_x, target_y);
 
-    scale_ = ci::math<float>::min(width_scale, height_scale);
+    centroid_target *= -1.0f;
+
+    float width_scale  = static_cast<float>(AdjApp::instance().getWindowWidth() - 
+        2 * width_border_) / 
+        (delta_x);
+    float height_scale = static_cast<float>(AdjApp::instance().getWindowHeight() - 
+        2 * height_border_) / 
+        (delta_y);
+
+    float abs_scale = ci::math<float>::min(width_scale, height_scale);
+
+    if (width_scale < height_scale)
+        centroid_target.y += (AdjApp::instance().getWindowHeight() / scale_ - delta_y) / 2.0f;
+    else
+        centroid_target.x += (AdjApp::instance().getWindowWidth() / scale_ - delta_x) / 2.0f;
+
+    centroid_ += (centroid_target - centroid_) * centroid_damping_;
+
+    scale_ += (abs_scale - scale_) * scale_damping_;
 }
 
 Camera& Camera::instance() {

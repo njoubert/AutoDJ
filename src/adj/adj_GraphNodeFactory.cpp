@@ -16,6 +16,7 @@
 #include "adj/adj_Song.h"
 #include "adj/adj_VoteManager.h"
 #include "adj/adj_GraphOracle.h"
+#include "adj/adj_NowPlayingHeadline.h"
 
 namespace adj {
 
@@ -62,6 +63,7 @@ void GraphNodeFactory::add_new_to_node(GraphNodePtr p) {
 GraphNodePtr GraphNodeFactory::create_new_node(SongId id) {
     GraphNodePtr q(new GraphNode());
     q->song_ = SongFactory::instance().lookup_song(id);
+	
     q->init();
 
     graph_nodes_.push_back(q);
@@ -111,11 +113,20 @@ void GraphNodeFactory::update_graph_from_vote(VotePtr vote) {
 
 void GraphNodeFactory::create_new_node_from_vote(VotePtr vote) {
     // create a new node. This doesn't create a particle
-    GraphNodePtr new_node = create_new_node(vote->song_id);
-    new_node->register_vote(vote);
+    GraphNodePtr new_node;
+	
+	try {
+		new_node = create_new_node(vote->song_id);
+	} catch (std::exception ex) {
+		ci::app::console() << "Error creating new node from vote." << std::endl;
+		ci::app::console() << ex.what() << std::endl;
+		return;
+	}
 
     ci::app::console() << "Creating new node for song: " << 
         new_node->song().name() << std::endl;
+	
+	new_node->register_vote(vote);
 
     // if it's the first, show it, return
     if (graph_nodes_.size() == 1) {
@@ -147,7 +158,8 @@ void GraphNodeFactory::pair_nodes(SongId new_id, SongId existing_id) {
     existing_node->add_child(new_node);
     new_node->parent_ = existing_node;
 
-    add_edge(std::pair<GraphNodePtr, GraphNodePtr>(new_node, existing_node));
+	std::pair<GraphNodePtr, GraphNodePtr> p(new_node, existing_node);
+    add_edge(p);
 
     new_node->register_just_added();
     new_node->show();
@@ -193,6 +205,63 @@ void GraphNodeFactory::remove_edge(std::pair<GraphNodePtr, GraphNodePtr>& edge) 
 
         ++it;
     }
+}
+
+void GraphNodeFactory::delete_node(GraphNodePtr node) {
+    // remove from main vector
+    std::vector<GraphNodePtr>::iterator vec_it = std::find(
+        graph_nodes_.begin(), graph_nodes_.end(), node);
+    
+    graph_nodes_.erase(vec_it);
+
+    // remove from edges
+
+    for (std::vector<std::pair<GraphNodePtr, GraphNodePtr> >::iterator
+        it = edges_.begin(); it != edges_.end(); ) {
+        
+         if (it->first == node || it->second == node) {
+            edges_.erase(it);
+            it = edges_.begin();
+            continue;
+        }
+
+        ++it;
+    }
+
+    // remove from song map
+    song_map_it_ = song_map_.find(node->song().id());
+
+    song_map_.erase(song_map_it_);
+
+    // remove from any nodes's children
+
+    for (std::vector<GraphNodePtr>::iterator it = graph_nodes_.begin();
+        it != graph_nodes_.end(); ++it) {
+
+        (*it)->remove_child(node);
+    }
+
+    // remove from any node's parents
+    for (std::vector<GraphNodePtr>::iterator it = graph_nodes_.begin();
+        it != graph_nodes_.end(); ++it) {
+
+        if ((*it)->parent() != node)
+             continue;
+
+        (*it)->delete_parent();
+    }
+
+    // check the PlayManager
+
+    if (PlayManager::instance().next_song_ == node)
+        PlayManager::instance().next_song_.reset();
+
+    if (PlayManager::instance().now_playing_ == node)
+        PlayManager::instance().now_playing_.reset();
+
+    // check if it's in the Now Playing Headline
+
+    NowPlayingHeadline::instance().remove_now_playing(node);
 }
 
 

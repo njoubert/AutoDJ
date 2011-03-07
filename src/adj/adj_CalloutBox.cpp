@@ -55,10 +55,15 @@ CalloutBox::CalloutBox(GraphNode& parent) : node_(parent) {
 void CalloutBox::init() {
     box_coords_.resize(4);
 
-    medium_font_ = ci::Font(ci::app::loadResource(RES_MEDIUM_FONT), 
+    medium_font_ = ci::Font(ci::app::loadResource(RES_CROWDTAP_FONT), 
         static_cast<float>(font_size_));
 
     hide();
+}
+
+CalloutBox::~CalloutBox() {
+    // delete box particle
+    GraphPhysics::instance().remove_box_particle(particle_);
 }
 
 void CalloutBox::update_contents() {
@@ -83,10 +88,17 @@ void CalloutBox::update_maxima() {
 }
 
 void CalloutBox::calculate_surface_size() {
-    int width = 600; // TODO: make this real
+    int width = calculate_surface_width(); 
     int num_photos = resized_user_photos_.size();
-    int height = top_margin_ * 2 + font_size_ * 3 + 
-        text_spacing_ * 2 + num_photos * photo_spacing_;
+
+    int extra_vert_dim = 0;
+
+    if (node_.is_current_song())
+        extra_vert_dim = font_size_ + text_spacing_ * 3;
+
+
+    int height = extra_vert_dim + top_margin_ * 2 + font_size_ * 3 + 
+        text_spacing_ * 4 + num_photos * photo_spacing_; // extra 2 text spacing for "Voted by:" extra gap
 
     for (std::deque<ci::gl::Texture>::iterator it = resized_user_photos_.begin();
         it != resized_user_photos_.end(); ++it) {
@@ -123,6 +135,22 @@ void CalloutBox::update_box_position() {
     box_coords_[1] = box_upper_right_;
     box_coords_[2] = box_lower_right_;
     box_coords_[3] = box_lower_left_;
+}
+
+float CalloutBox::get_width() {
+    return surface_size_.x * scale_;
+}
+
+float CalloutBox::get_height() {
+    return surface_size_.y * scale_;
+}
+
+float CalloutBox::get_pos_x() {
+    return box_position_.x;
+}
+
+float CalloutBox::get_pos_y() {
+    return box_position_.y;
 }
 
 void CalloutBox::draw() {
@@ -190,8 +218,8 @@ void CalloutBox::render_connection() {
 
     ci::Vec2f surface_origin(leftmost_x, topmost_y);
 
-    float surface_width = width / scale_;
-    float surface_height = height / scale_;
+    float surface_width = width / scale_ + line_width_ / scale_;
+    float surface_height = height / scale_ + line_width_ / scale_;
 
     connect_surface_ = std::shared_ptr<ci::cairo::SurfaceImage>(new 
         ci::cairo::SurfaceImage(surface_width, surface_height, true));
@@ -203,6 +231,10 @@ void CalloutBox::render_connection() {
         node_.node_highlight_color().g, node_.node_highlight_color().b);
 
     context_setup_dash(connect_context_);
+
+    ci::Vec2f width_vec(line_width_, line_width_);
+
+    surface_origin -= width_vec / 2.0f;
 
     connect_context_->line((node_pos - surface_origin) / scale_,
         (a - surface_origin) / scale_);
@@ -253,6 +285,40 @@ void CalloutBox::hide() {
     particle_.reset();
 }
 
+float CalloutBox::calculate_surface_width() {
+    std::string max_name;
+    bool user_name_max = true;
+
+    for (std::deque<UserPtr>::iterator user_it = node_.song().users().begin();
+        user_it != node_.song().users().end(); ++user_it) {
+        if (max_name.length() > (*user_it)->name_.length())
+            continue;
+
+        max_name = (*user_it)->name_;
+    }
+
+    if (node_.song().name().length() > max_name.length()) {
+        max_name = node_.song().name();
+        user_name_max = false;
+    }
+
+    if (node_.song().artist().length() > max_name.length()) {
+        max_name = node_.song().artist();
+        user_name_max = false;
+    }
+
+    // CHANGE THIS IF THE TEXT IS GOING OUTSIDE CALLOUT BOX
+    // ====================================================
+    float letter_width = 2.2f / scale_;
+
+    if (user_name_max)
+        return kMaxImageWidth + photo_spacing_ * 2.f + 
+            max_name.length() * letter_width +
+            side_margin_ * 2.f;
+
+    return max_name.length() * letter_width + side_margin_ * 2.f;
+}
+
 void CalloutBox::set_contents() {
     ci::Vec2f text_pos(side_margin_, top_margin_ + font_size_);
     ci::Vec2f font_height_offset(0.0f, font_size_ + text_spacing_);
@@ -269,10 +335,11 @@ void CalloutBox::set_contents() {
     context_->setFontSize(static_cast<double>(font_size_));
     context_->setSourceRgb(1.0f, 1.0f, 1.0f);
 
-    context_->moveTo(text_pos);
-    context_->showText(boost::lexical_cast<std::string>(node_.distance_from_current()));
-
-    text_pos += font_height_offset;
+    if (node_.is_current_song()) {
+        context_->moveTo(text_pos);
+        context_->showText("Now Playing:");
+        text_pos += ci::Vec2f(0.0f, font_size_ + text_spacing_ * 3);
+    }
 
     context_->moveTo(text_pos);
     context_->showText(node_.song().name());
@@ -281,6 +348,12 @@ void CalloutBox::set_contents() {
 
     context_->moveTo(text_pos);
     context_->showText(node_.song().artist());
+
+    text_pos += font_height_offset;
+    text_pos += ci::Vec2f(0.0f, 2.f * text_spacing_);
+
+    context_->moveTo(text_pos);
+    context_->showText("Voted By:");
 
     text_pos += ci::Vec2f(0.0f, photo_spacing_);
     ci::Vec2f photo_pos = text_pos + ci::Vec2f(kMaxImageWidth / 2.0f, 0.0f);
@@ -335,7 +408,7 @@ void CalloutBox::set_contents() {
 // create a new text texture
 void CalloutBox::refresh_text() {
     ci::TextLayout layout;
-    layout.setFont(ci::Font(ci::app::loadResource(RES_MEDIUM_FONT), 
+    layout.setFont(ci::Font(ci::app::loadResource(RES_CROWDTAP_FONT), 
         static_cast<float>(font_size_)));
     layout.setColor(text_color_);
     layout.addCenteredLine(node_.song().name());

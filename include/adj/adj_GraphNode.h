@@ -3,14 +3,15 @@
 
 #include <vector>
 
-#include "boost/date_time/posix_time/posix_time.hpp"
+#include <boost/date_time/posix_time/posix_time.hpp>
 
-#include "cinder/gl/gl.h"
-#include "cinder/gl/Texture.h"
+#include <cinder/gl/gl.h>
+#include <cinder/gl/Texture.h>
 
-#include "adj/adj_Adj.h"
-#include "adj/adj_GraphNodeFactory.h"
-#include "adj/adj_PlayManager.h"
+#include <adj/adj_Adj.h>
+#include <adj/adj_GraphNodeFactory.h>
+#include <adj/adj_PlayManager.h>
+#include <adj/adj_GraphicItem.h>
 
 namespace graph {
     class Particle;
@@ -31,7 +32,7 @@ typedef std::shared_ptr<CalloutBox> CalloutBoxPtr;
 
 typedef std::shared_ptr<struct Vote> VotePtr;
 
-class GraphNode {
+class GraphNode : public GraphicItem {
 public:
     GraphNode();
     ~GraphNode();
@@ -39,10 +40,23 @@ public:
     void init();
 
     void draw();
+    void draw_callout_box();
+    void draw_node_body();
+
+    float get_width();
+    float get_height();
+    float get_pos_x();
+    float get_pos_y();
+    bool visible() { return visible_; } 
+    std::string type() { return "GraphNode"; }
 
     // checks to see if the child has already been added 
     void add_child(GraphNodePtr);
+    void remove_child(GraphNodePtr);
     const std::vector<GraphNodePtr>& children() { return children_; }
+
+    // this is probably a Bad Thing....
+    void delete_parent() { parent_.reset(); }
 
     friend class GraphNodeFactory;
 
@@ -81,6 +95,8 @@ public:
     void show();
     void hide();
 
+    friend class DJController;
+
 private:
     void draw_current_song();
     void draw_node(); // regular drawing
@@ -94,6 +110,7 @@ private:
     void start_callout_fadein();
     void start_callout_fadeout();
     void trigger_next_node();
+    void update_spring_values();
 
     SongPtr song_;
     ParticlePtr particle_;
@@ -116,6 +133,7 @@ private:
     boost::posix_time::ptime fade_timer_;
     boost::posix_time::ptime display_timer_;
     boost::posix_time::ptime path_trigger_timer_;
+    boost::posix_time::ptime last_vote_time_;
 
     float scale_;
 
@@ -129,6 +147,16 @@ private:
     bool visible_;
 
     float circle_radius_;
+
+    ci::Surface highlight_circle_;
+    ci::gl::Texture highlight_circle_texture_;
+    float circle_texture_scale_;
+
+    int relax_time_; // in milliseconds
+    float closest_spring_length_;
+    float closest_spring_strength_;
+    float farthest_spring_length_;
+    float farthest_spring_strength_;
 };
 
 }
